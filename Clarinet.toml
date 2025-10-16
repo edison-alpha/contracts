@@ -6,7 +6,7 @@ telemetry = true
 cache_dir = "./.cache"
 
 # [contracts.CHANGE-THIS-TO-YOUR-CONTRACT-NAME]
-# path = "contracts/CHANGE-THIS-TO-YOUR-CONTRACT-NAME.clar"
+# path = "contracts/event-registry.clar"
 
 [repl.analysis]
 passes = ["check_checker"]

@@ -1,231 +1,551 @@
-;; Event Registry Contract for Intic.id
-;; Central registry to track all deployed event NFT contracts
-;; Version: 1.0.0
+;; Event Registry Contract for INTIC Platform
 
-;; Constants
+;; =============================================================================
+;; CONSTANTS
+;; =============================================================================
+
 (define-constant CONTRACT-OWNER tx-sender)
+(define-constant REGISTRATION-FEE u1000000) ;; 0.01 STX registration fee
+(define-constant VERIFICATION-FEE u5000000) ;; 0.05 STX for verified badge
+
+;; Error codes
 (define-constant ERR-OWNER-ONLY (err u100))
 (define-constant ERR-UNAUTHORIZED (err u101))
 (define-constant ERR-NOT-FOUND (err u102))
-(define-constant ERR-ALREADY-EXISTS (err u103))
+(define-constant ERR-ALREADY-REGISTERED (err u103))
 (define-constant ERR-INVALID-INPUT (err u104))
+(define-constant ERR-INSUFFICIENT-FEE (err u105))
+(define-constant ERR-NOT-VERIFIED (err u106))
 
-;; Data Variables
-(define-data-var next-event-id uint u1)
-(define-data-var platform-fee-percentage uint u250) ;; 2.5% platform fee
+;; =============================================================================
+;; DATA MAPS
+;; =============================================================================
 
-;; Event Registry Map
-(define-map events uint {
-  event-id: uint,
-  contract-address: principal,
-  contract-name: (string-ascii 128),
-  event-name: (string-utf8 256),
-  organizer: principal,
-  category: (string-utf8 64),
-  deployed-at: uint,
-  event-date: uint,
-  total-supply: uint,
-  ticket-price: uint,
-  currency: (string-ascii 10),
-  metadata-uri: (string-ascii 256),
-  is-active: bool,
-  is-verified: bool
-})
+;; Main registry: event-id to event details
+(define-map events 
+  { event-id: uint } 
+  {
+    contract-address: principal,
+    contract-name: (string-ascii 128),
+    creator: principal,
+    event-name: (string-utf8 256),
+    event-description: (string-utf8 1024),
+    category: (string-ascii 64),
+    venue: (string-utf8 256),
+    venue-address: (string-utf8 512),
+    venue-coordinates: (string-ascii 64),
+    event-date: uint,
+    ticket-price: uint,
+    total-supply: uint,
+    image-uri: (string-ascii 256),
+    metadata-uri: (string-ascii 256),
+    is-active: bool,
+    is-verified: bool,
+    is-featured: bool,
+    registered-at: uint,
+    total-minted: uint,
+    total-volume: uint,
+    total-sales: uint,
+    floor-price: uint,
+    views: uint,
+    favorites: uint
+  }
+)
 
-;; Organizer Events - Track events by organizer
-(define-map organizer-events principal (list 100 uint))
+;; Index by contract address for quick lookup
+(define-map contract-to-event-id
+  principal
+  uint
+)
 
-;; Event Statistics
-(define-map event-stats uint {
-  tickets-sold: uint,
-  total-revenue: uint,
-  last-updated: uint
-})
+;; Index by creator for "My Events"
+(define-map creator-events
+  { creator: principal, index: uint }
+  uint
+)
 
-;; Category Index - For filtering
-(define-map category-events (string-utf8 64) (list 100 uint))
+(define-map creator-event-count
+  principal
+  uint
+)
 
-;; Verified Organizers
-(define-map verified-organizers principal bool)
+;; Category index for browsing
+(define-map category-events
+  { category: (string-ascii 64), index: uint }
+  uint
+)
 
-;; Platform Statistics
-(define-map platform-stats (string-ascii 32) uint)
+(define-map category-event-count
+  (string-ascii 64)
+  uint
+)
+
+;; Featured events curated list
+(define-map featured-events
+  uint
+  uint
+)
+
+;; User favorites
+(define-map user-favorites
+  { user: principal, event-id: uint }
+  bool
+)
+
+(define-map user-favorite-count
+  principal
+  uint
+)
+
+;; Event views tracking
+(define-map event-views
+  { event-id: uint, viewer: principal }
+  uint
+)
+
+;; Verification requests
+(define-map verification-requests
+  uint
+  {
+    requested-at: uint,
+    status: (string-ascii 32),
+    reviewed-at: (optional uint),
+    reviewer: (optional principal),
+    notes: (optional (string-utf8 512))
+  }
+)
+
+;; =============================================================================
+;; DATA VARIABLES
+;; =============================================================================
+
+(define-data-var event-counter uint u0)
+(define-data-var featured-counter uint u0)
+(define-data-var platform-treasury uint u0)
+
+;; =============================================================================
+;; REGISTRATION FUNCTIONS
+;; =============================================================================
 
 ;; Register new event contract
 (define-public (register-event
-  (contract-address principal)
-  (contract-name (string-ascii 128))
-  (event-name (string-utf8 256))
-  (category (string-utf8 64))
-  (event-date uint)
-  (total-supply uint)
-  (ticket-price uint)
-  (currency (string-ascii 10))
-  (metadata-uri (string-ascii 256)))
+    (contract-address principal)
+    (contract-name (string-ascii 128))
+    (event-name (string-utf8 256))
+    (event-description (string-utf8 1024))
+    (category (string-ascii 64))
+    (venue (string-utf8 256))
+    (venue-address (string-utf8 512))
+    (venue-coordinates (string-ascii 64))
+    (event-date uint)
+    (ticket-price uint)
+    (total-supply uint)
+    (image-uri (string-ascii 256))
+    (metadata-uri (string-ascii 256))
+  )
   (let
     (
-      (event-id (var-get next-event-id))
-      (current-events (default-to (list) (map-get? organizer-events tx-sender)))
-      (category-events-list (default-to (list) (map-get? category-events category)))
+      (event-id (+ (var-get event-counter) u1))
+      (creator tx-sender)
+      (current-time stacks-block-height)
     )
+    
+    (asserts! (is-none (map-get? contract-to-event-id contract-address)) ERR-ALREADY-REGISTERED)
+    
+    (try! (stx-transfer? REGISTRATION-FEE tx-sender (as-contract tx-sender)))
+    
+    (map-set events
+      { event-id: event-id }
+      {
+        contract-address: contract-address,
+        contract-name: contract-name,
+        creator: creator,
+        event-name: event-name,
+        event-description: event-description,
+        category: category,
+        venue: venue,
+        venue-address: venue-address,
+        venue-coordinates: venue-coordinates,
+        event-date: event-date,
+        ticket-price: ticket-price,
+        total-supply: total-supply,
+        image-uri: image-uri,
+        metadata-uri: metadata-uri,
+        is-active: true,
+        is-verified: false,
+        is-featured: false,
+        registered-at: current-time,
+        total-minted: u0,
+        total-volume: u0,
+        total-sales: u0,
+        floor-price: u0,
+        views: u0,
+        favorites: u0
+      }
+    )
+    
+    (map-set contract-to-event-id contract-address event-id)
+    
+    (let ((creator-count (default-to u0 (map-get? creator-event-count creator))))
+      (map-set creator-events
+        { creator: creator, index: creator-count }
+        event-id
+      )
+      (map-set creator-event-count creator (+ creator-count u1))
+    )
+    
+    (let ((cat-count (default-to u0 (map-get? category-event-count category))))
+      (map-set category-events
+        { category: category, index: cat-count }
+        event-id
+      )
+      (map-set category-event-count category (+ cat-count u1))
+    )
+    
+    (var-set event-counter event-id)
+    (var-set platform-treasury (+ (var-get platform-treasury) REGISTRATION-FEE))
+    
+    (ok event-id)
+  )
+)
 
-    ;; Validations
-    (asserts! (> (len event-name) u0) ERR-INVALID-INPUT)
-    (asserts! (> total-supply u0) ERR-INVALID-INPUT)
-    (asserts! (> ticket-price u0) ERR-INVALID-INPUT)
+;; Update event details
+(define-public (update-event
+    (event-id uint)
+    (event-name (string-utf8 256))
+    (event-description (string-utf8 1024))
+    (venue (string-utf8 256))
+    (venue-address (string-utf8 512))
+    (venue-coordinates (string-ascii 64))
+    (event-date uint)
+    (image-uri (string-ascii 256))
+    (metadata-uri (string-ascii 256))
+  )
+  (let
+    (
+      (event (unwrap! (map-get? events { event-id: event-id }) ERR-NOT-FOUND))
+    )
+    
+    (asserts! (is-eq tx-sender (get creator event)) ERR-UNAUTHORIZED)
+    
+    (map-set events
+      { event-id: event-id }
+      (merge event {
+        event-name: event-name,
+        event-description: event-description,
+        venue: venue,
+        venue-address: venue-address,
+        venue-coordinates: venue-coordinates,
+        event-date: event-date,
+        image-uri: image-uri,
+        metadata-uri: metadata-uri
+      })
+    )
+    
+    (ok true)
+  )
+)
 
-    ;; Register event
-    (map-set events event-id {
-      event-id: event-id,
-      contract-address: contract-address,
-      contract-name: contract-name,
-      event-name: event-name,
-      organizer: tx-sender,
-      category: category,
-      deployed-at: block-height,
-      event-date: event-date,
-      total-supply: total-supply,
-      ticket-price: ticket-price,
-      currency: currency,
-      metadata-uri: metadata-uri,
-      is-active: true,
-      is-verified: false
+;; Deactivate event
+(define-public (deactivate-event (event-id uint))
+  (let
+    (
+      (event (unwrap! (map-get? events { event-id: event-id }) ERR-NOT-FOUND))
+    )
+    
+    (asserts! (is-eq tx-sender (get creator event)) ERR-UNAUTHORIZED)
+    
+    (map-set events
+      { event-id: event-id }
+      (merge event { is-active: false })
+    )
+    
+    (ok true)
+  )
+)
+
+;; =============================================================================
+;; VERIFICATION FUNCTIONS
+;; =============================================================================
+
+;; Request verification
+(define-public (request-verification (event-id uint))
+  (let
+    (
+      (event (unwrap! (map-get? events { event-id: event-id }) ERR-NOT-FOUND))
+      (current-time stacks-block-height)
+    )
+    
+    (asserts! (is-eq tx-sender (get creator event)) ERR-UNAUTHORIZED)
+    
+    (try! (stx-transfer? VERIFICATION-FEE tx-sender (as-contract tx-sender)))
+    
+    (map-set verification-requests event-id {
+      requested-at: current-time,
+      status: "pending",
+      reviewed-at: none,
+      reviewer: none,
+      notes: none
     })
+    
+    (var-set platform-treasury (+ (var-get platform-treasury) VERIFICATION-FEE))
+    
+    (ok true)
+  )
+)
 
-    ;; Initialize stats
-    (map-set event-stats event-id {
-      tickets-sold: u0,
-      total-revenue: u0,
-      last-updated: block-height
-    })
-
-    ;; Add to organizer's events
-    (map-set organizer-events tx-sender
-      (unwrap! (as-max-len? (append current-events event-id) u100) ERR-INVALID-INPUT))
-
-    ;; Add to category index
-    (map-set category-events category
-      (unwrap! (as-max-len? (append category-events-list event-id) u100) ERR-INVALID-INPUT))
-
-    ;; Increment event counter
-    (var-set next-event-id (+ event-id u1))
-
-    ;; Update platform stats
-    (update-platform-stat "total-events" u1)
-
-    (ok event-id)))
-
-;; Update event status (organizer only)
-(define-public (update-event-status (event-id uint) (is-active bool))
-  (let ((event (unwrap! (map-get? events event-id) ERR-NOT-FOUND)))
-    (asserts! (is-eq tx-sender (get organizer event)) ERR-UNAUTHORIZED)
-    (map-set events event-id (merge event { is-active: is-active }))
-    (ok true)))
-
-;; Update event statistics (called by event contracts or indexer)
-(define-public (update-event-stats
-  (event-id uint)
-  (tickets-sold uint)
-  (total-revenue uint))
-  (let ((event (unwrap! (map-get? events event-id) ERR-NOT-FOUND)))
-    ;; Only contract owner or event organizer can update stats
-    (asserts! (or (is-eq tx-sender CONTRACT-OWNER)
-                  (is-eq tx-sender (get organizer event)))
-              ERR-UNAUTHORIZED)
-
-    (map-set event-stats event-id {
-      tickets-sold: tickets-sold,
-      total-revenue: total-revenue,
-      last-updated: block-height
-    })
-
-    (ok true)))
-
-;; Verify organizer (platform admin only)
-(define-public (verify-organizer (organizer principal) (verified bool))
-  (begin
+;; Approve verification
+(define-public (approve-verification (event-id uint) (notes (optional (string-utf8 512))))
+  (let
+    (
+      (event (unwrap! (map-get? events { event-id: event-id }) ERR-NOT-FOUND))
+      (request (unwrap! (map-get? verification-requests event-id) ERR-NOT-FOUND))
+      (current-time stacks-block-height)
+    )
+    
     (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-OWNER-ONLY)
-    (map-set verified-organizers organizer verified)
-    (ok true)))
+    
+    (map-set events
+      { event-id: event-id }
+      (merge event { is-verified: true })
+    )
+    
+    (map-set verification-requests event-id
+      (merge request {
+        status: "approved",
+        reviewed-at: (some current-time),
+        reviewer: (some tx-sender),
+        notes: notes
+      })
+    )
+    
+    (ok true)
+  )
+)
 
-;; Verify event (platform admin only)
-(define-public (verify-event (event-id uint))
-  (let ((event (unwrap! (map-get? events event-id) ERR-NOT-FOUND)))
+;; =============================================================================
+;; SOCIAL FUNCTIONS
+;; =============================================================================
+
+;; Track view
+(define-public (track-view (event-id uint))
+  (let
+    (
+      (event (unwrap! (map-get? events { event-id: event-id }) ERR-NOT-FOUND))
+      (current-time stacks-block-height)
+    )
+    
+    (map-set event-views
+      { event-id: event-id, viewer: tx-sender }
+      current-time
+    )
+    
+    (map-set events
+      { event-id: event-id }
+      (merge event { views: (+ (get views event) u1) })
+    )
+    
+    (ok true)
+  )
+)
+
+;; Add to favorites
+(define-public (add-favorite (event-id uint))
+  (let
+    (
+      (event (unwrap! (map-get? events { event-id: event-id }) ERR-NOT-FOUND))
+      (user-fav-count (default-to u0 (map-get? user-favorite-count tx-sender)))
+    )
+    
+    (map-set user-favorites
+      { user: tx-sender, event-id: event-id }
+      true
+    )
+    
+    (map-set user-favorite-count tx-sender (+ user-fav-count u1))
+    
+    (map-set events
+      { event-id: event-id }
+      (merge event { favorites: (+ (get favorites event) u1) })
+    )
+    
+    (ok true)
+  )
+)
+
+;; Remove from favorites
+(define-public (remove-favorite (event-id uint))
+  (let
+    (
+      (event (unwrap! (map-get? events { event-id: event-id }) ERR-NOT-FOUND))
+      (user-fav-count (default-to u0 (map-get? user-favorite-count tx-sender)))
+    )
+    
+    (map-delete user-favorites
+      { user: tx-sender, event-id: event-id }
+    )
+    
+    (map-set user-favorite-count tx-sender (if (> user-fav-count u0) (- user-fav-count u1) u0))
+    
+    (map-set events
+      { event-id: event-id }
+      (merge event { 
+        favorites: (if (> (get favorites event) u0) 
+                     (- (get favorites event) u1) 
+                     u0
+                   )
+      })
+    )
+    
+    (ok true)
+  )
+)
+
+;; Feature event
+(define-public (feature-event (event-id uint))
+  (let
+    (
+      (event (unwrap! (map-get? events { event-id: event-id }) ERR-NOT-FOUND))
+      (featured-count (var-get featured-counter))
+    )
+    
     (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-OWNER-ONLY)
-    (map-set events event-id (merge event { is-verified: true }))
-    (ok true)))
+    
+    (map-set featured-events featured-count event-id)
+    (var-set featured-counter (+ featured-count u1))
+    
+    (map-set events
+      { event-id: event-id }
+      (merge event { is-featured: true })
+    )
+    
+    (ok true)
+  )
+)
 
-;; Read-only functions
+;; =============================================================================
+;; STATS FUNCTIONS
+;; =============================================================================
 
+;; Update mint stats
+(define-public (update-mint-stats (event-id uint) (quantity uint))
+  (let
+    (
+      (event (unwrap! (map-get? events { event-id: event-id }) ERR-NOT-FOUND))
+    )
+    
+    (asserts! 
+      (or 
+        (is-eq tx-sender (get contract-address event))
+        (is-eq tx-sender (get creator event))
+      )
+      ERR-UNAUTHORIZED
+    )
+    
+    (map-set events
+      { event-id: event-id }
+      (merge event { 
+        total-minted: (+ (get total-minted event) quantity)
+      })
+    )
+    
+    (ok true)
+  )
+)
+
+;; Update sale stats
+(define-public (update-sale-stats (event-id uint) (sale-price uint))
+  (let
+    (
+      (event (unwrap! (map-get? events { event-id: event-id }) ERR-NOT-FOUND))
+      (new-volume (+ (get total-volume event) sale-price))
+      (new-sales (+ (get total-sales event) u1))
+      (current-floor (get floor-price event))
+      (new-floor (if (or (is-eq current-floor u0) (< sale-price current-floor))
+                    sale-price
+                    current-floor))
+    )
+    
+    (map-set events
+      { event-id: event-id }
+      (merge event {
+        total-volume: new-volume,
+        total-sales: new-sales,
+        floor-price: new-floor
+      })
+    )
+    
+    (ok true)
+  )
+)
+
+;; =============================================================================
+;; READ-ONLY FUNCTIONS
+;; =============================================================================
+
+;; Get event by ID
 (define-read-only (get-event (event-id uint))
-  (map-get? events event-id))
+  (ok (map-get? events { event-id: event-id }))
+)
 
-(define-read-only (get-event-stats (event-id uint))
-  (map-get? event-stats event-id))
-
-(define-read-only (get-organizer-events (organizer principal))
-  (ok (default-to (list) (map-get? organizer-events organizer))))
-
-(define-read-only (get-category-events (category (string-utf8 64)))
-  (ok (default-to (list) (map-get? category-events category))))
-
-(define-read-only (is-organizer-verified (organizer principal))
-  (default-to false (map-get? verified-organizers organizer)))
-
-(define-read-only (get-total-events)
-  (ok (- (var-get next-event-id) u1)))
-
-(define-read-only (get-platform-fee)
-  (ok (var-get platform-fee-percentage)))
-
-;; Get event with full details (event + stats)
-(define-read-only (get-event-details (event-id uint))
+;; Get event by contract address
+(define-read-only (get-event-by-contract (contract-address principal))
   (let
     (
-      (event-data (map-get? events event-id))
-      (stats-data (map-get? event-stats event-id))
+      (event-id (map-get? contract-to-event-id contract-address))
     )
-    (ok {
-      event: event-data,
-      stats: stats-data
-    })))
+    (if (is-some event-id)
+      (ok (map-get? events { event-id: (unwrap-panic event-id) }))
+      (ok none)
+    )
+  )
+)
 
-;; Get multiple events (for listing/pagination)
-(define-read-only (get-events-range (start-id uint) (count uint))
-  (ok (map get-event-if-exists
-    (list start-id
-          (+ start-id u1)
-          (+ start-id u2)
-          (+ start-id u3)
-          (+ start-id u4)))))
+;; Get creator events
+(define-read-only (get-creator-events (creator principal) (offset uint) (limit uint))
+  (ok {
+    total: (default-to u0 (map-get? creator-event-count creator)),
+    offset: offset,
+    limit: limit
+  })
+)
 
-(define-read-only (get-event-if-exists (event-id uint))
-  (map-get? events event-id))
+;; Get category events
+(define-read-only (get-category-events (category (string-ascii 64)) (offset uint) (limit uint))
+  (ok {
+    total: (default-to u0 (map-get? category-event-count category)),
+    offset: offset,
+    limit: limit
+  })
+)
 
-;; Helper function to update platform stats
-(define-private (update-platform-stat (stat-name (string-ascii 32)) (increment uint))
-  (let ((current-value (default-to u0 (map-get? platform-stats stat-name))))
-    (map-set platform-stats stat-name (+ current-value increment))
-    true))
+;; Get featured events
+(define-read-only (get-featured-events)
+  (ok {
+    total: (var-get featured-counter)
+  })
+)
+
+;; Check if favorited
+(define-read-only (is-favorited (user principal) (event-id uint))
+  (ok (default-to false (map-get? user-favorites { user: user, event-id: event-id })))
+)
 
 ;; Get platform stats
 (define-read-only (get-platform-stats)
   (ok {
-    total-events: (default-to u0 (map-get? platform-stats "total-events")),
-    total-organizers: (default-to u0 (map-get? platform-stats "total-organizers"))
-  }))
+    total-events: (var-get event-counter),
+    total-featured: (var-get featured-counter),
+    platform-treasury: (var-get platform-treasury)
+  })
+)
 
-;; Admin functions
+;; Get verification request
+(define-read-only (get-verification-request (event-id uint))
+  (ok (map-get? verification-requests event-id))
+)
 
-(define-public (set-platform-fee (new-fee uint))
-  (begin
-    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-OWNER-ONLY)
-    (asserts! (<= new-fee u1000) ERR-INVALID-INPUT) ;; Max 10%
-    (var-set platform-fee-percentage new-fee)
-    (ok true)))
-
-(define-public (remove-event (event-id uint))
-  (let ((event (unwrap! (map-get? events event-id) ERR-NOT-FOUND)))
-    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-OWNER-ONLY)
-    (map-set events event-id (merge event { is-active: false }))
-    (ok true)))
+;; Get total events
+(define-read-only (get-total-events)
+  (ok (var-get event-counter))
+)

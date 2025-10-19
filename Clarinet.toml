@@ -1,12 +1,12 @@
 [project]
-name = "blank-project"
-description = "Create a project from scratch: Start from a blank scaffold for your next Clarity contract"
-authors = []
+name = "event-registry"
+description = "Event Registry Clarity contracts for Hiro Git Projects deployment"
+authors = ["edison-alpha"]
 telemetry = true
 cache_dir = "./.cache"
 
-# [contracts.CHANGE-THIS-TO-YOUR-CONTRACT-NAME]
-# path = "contracts/event-registry.clar"
+[contracts.event-registry]
+path = "contracts/event-registry.clar"
 
 [repl.analysis]
 passes = ["check_checker"]

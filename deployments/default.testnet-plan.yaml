@@ -5,4 +5,14 @@ network: testnet
 stacks-node: "https://stacks-node-api.testnet.stacks.co"
 bitcoin-node: "http://blockstack:blockstacksystem@bitcoind.testnet.stacks.co:18332"
 plan:
-  batches: []
+  batches:
+    - id: 0
+      transactions:
+        - contract-publish:
+            contract-name: event-registry
+            expected-sender: ST129MJW58K814BTYAWB465VBGQ5TA2CSXMHD1TYW
+            cost: 2230243
+            path: contracts/event-registry.clar
+            anchor-block-only: true
+            clarity-version: 1
+      epoch: "2.05"

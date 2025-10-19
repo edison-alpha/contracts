@@ -10,7 +10,7 @@ plan:
       transactions:
         - contract-publish:
             contract-name: event-registry
-            expected-sender: ST129MJW58K814BTYAWB465VBGQ5TA2CSXMHD1TYW
+            expected-sender: ST2DP05XPQ474JVTMAEY32W301T03HMKZGPJ55THW
             cost: 2230243
             path: contracts/event-registry.clar
             anchor-block-only: true

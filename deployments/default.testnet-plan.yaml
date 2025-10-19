@@ -10,8 +10,8 @@ plan:
       transactions:
         - contract-publish:
             contract-name: event-registry
-            expected-sender: ST2DP05XPQ474JVTMAEY32W301T03HMKZGPJ55THW
-            cost: 2230243
+            expected-sender: ST3D3XZP1W9BCNP2FD8D4A22K2MAT5YPS52Q3E9AZ
+            cost: 3448871
             path: contracts/event-registry.clar
             anchor-block-only: true
             clarity-version: 1
